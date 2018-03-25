@@ -23,6 +23,8 @@ import java.util.Objects;
 import static com.google.common.base.MoreObjects.toStringHelper;
 
 /**
+ * 本地时间戳序列
+ *
  * Timestamp based on logical sequence value.
  * <p>
  * LogicalTimestamps are ordered by their sequence values.

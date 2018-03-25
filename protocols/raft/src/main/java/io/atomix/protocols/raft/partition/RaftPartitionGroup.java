@@ -68,12 +68,19 @@ public class RaftPartitionGroup implements ManagedPartitionGroup {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(RaftPartitionGroup.class);
 
+  // group名称
   private final String name;
+  // 分区数目
   private final int partitionSize;
+  // key:分区id,value:分区信息
   private final Map<PartitionId, RaftPartition> partitions = Maps.newConcurrentMap();
+  // 有序的分区id
   private final List<PartitionId> sortedPartitionIds = Lists.newCopyOnWriteArrayList();
+  // 集群事件监听器
   private final ClusterEventListener clusterEventListener = this::handleClusterEvent;
+  // 分区管理service
   private PartitionManagementService managementService;
+  // 分区信息集合
   private Collection<PartitionMetadata> metadata;
   private CompletableFuture<Void> metadataChangeFuture = CompletableFuture.completedFuture(null);
 
@@ -84,6 +91,7 @@ public class RaftPartitionGroup implements ManagedPartitionGroup {
       this.partitions.put(p.id(), p);
       this.sortedPartitionIds.add(p.id());
     });
+    // 分区id升序排序
     Collections.sort(sortedPartitionIds);
   }
 
@@ -113,6 +121,12 @@ public class RaftPartitionGroup implements ManagedPartitionGroup {
     return sortedPartitionIds;
   }
 
+  /**
+   * 初始化分区
+   *
+   * @param managementService the partition management service
+   * @return
+     */
   @Override
   public CompletableFuture<ManagedPartitionGroup> open(PartitionManagementService managementService) {
     this.managementService = managementService;
@@ -121,9 +135,11 @@ public class RaftPartitionGroup implements ManagedPartitionGroup {
     List<CompletableFuture<Partition>> futures = metadata.stream()
         .map(metadata -> {
           RaftPartition partition = partitions.get(metadata.id());
+          // 初始化每个partition
           return partition.open(metadata, managementService);
         })
         .collect(Collectors.toList());
+    // 所有分区初始化完成后返回
     return CompletableFuture.allOf(futures.toArray(new CompletableFuture[futures.size()])).thenApply(v -> {
       LOGGER.info("Started");
       return this;
@@ -146,18 +162,29 @@ public class RaftPartitionGroup implements ManagedPartitionGroup {
     }
   }
 
+  /**
+   * 创建分区
+   *
+   * @param clusterService
+   * @return
+     */
   private Collection<PartitionMetadata> buildPartitions(ClusterService clusterService) {
+    // 分区大小
+    // 注意：这里说的分区大小是指一个分区有多少个节点
     int partitionSize = this.partitionSize;
+    // 如果分区数目为0，则分区数目为集群所有节点的数目
     if (partitionSize == 0) {
       partitionSize = clusterService.getNodes().size();
     }
 
+    // 获取集群中所有的DATA节点
     List<NodeId> sorted = new ArrayList<>(clusterService.getNodes().stream()
         .filter(node -> node.type() == Node.Type.DATA)
         .map(Node::id)
         .collect(Collectors.toSet()));
     Collections.sort(sorted);
 
+    // DATA节点数目
     int length = sorted.size();
     int count = Math.min(partitionSize, length);
 
@@ -197,6 +224,7 @@ public class RaftPartitionGroup implements ManagedPartitionGroup {
   public static class Builder extends PartitionGroup.Builder {
     private int numPartitions;
     private int partitionSize;
+    // 默认是内存映射级别
     private StorageLevel storageLevel = StorageLevel.MAPPED;
     private File dataDirectory = new File(System.getProperty("user.dir"), "data");
 

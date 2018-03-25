@@ -101,6 +101,7 @@ public final class MemberSelectorManager {
     this.leader = leader;
     this.members = Lists.newLinkedList(members);
     selectors.forEach(s -> s.reset(leader, this.members));
+    // 如果leader不一致，触发事件
     if (!Objects.equals(oldLeader, leader)) {
       leaderChangeListeners.forEach(l -> l.accept(leader));
     }

@@ -152,6 +152,7 @@ public class Node {
    *
    * @return the node endpoint
    */
+  // 节点的host,port信息
   public Endpoint endpoint() {
     return endpoint;
   }

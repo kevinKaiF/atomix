@@ -497,12 +497,19 @@ public class Atomix implements PrimitivesService, Managed<Atomix> {
         }
       }
 
+      // 负责集群节点通信service
       ManagedMessagingService messagingService = buildMessagingService();
+      // 负责集群元数据变更service
       ManagedClusterMetadataService metadataService = buildClusterMetadataService(messagingService);
+      // 负责集群节点状态，心跳service
       ManagedClusterService clusterService = buildClusterService(metadataService, messagingService);
+      // 负责集群消息发布订阅service
       ManagedClusterMessagingService clusterMessagingService = buildClusterMessagingService(clusterService, messagingService);
+      // 负责集群事件发布订阅service，以topic方式
       ManagedClusterEventingService clusterEventService = buildClusterEventService(clusterService, messagingService);
+      // 创建核心分区组
       ManagedPartitionGroup corePartitionGroup = buildCorePartitionGroup();
+      // 创建分区service
       ManagedPartitionService partitionService = buildPartitionService();
       return new Atomix(
           messagingService,
@@ -569,7 +576,7 @@ public class Atomix implements PrimitivesService, Managed<Atomix> {
      */
     protected ManagedPartitionGroup buildCorePartitionGroup() {
       return RaftPartitionGroup.builder("core")
-          .withNumPartitions(1)
+          .withNumPartitions(1)   // 一个分区
           .withDataDirectory(new File(dataDirectory, "core"))
           .build();
     }
@@ -578,6 +585,7 @@ public class Atomix implements PrimitivesService, Managed<Atomix> {
      * Builds a partition service.
      */
     protected ManagedPartitionService buildPartitionService() {
+      // 如果分区组为空，则添加RaftPartitionGroup分区（默认7个）和PrimaryBackupPartitionGroup(默认71个)
       if (partitionGroups.isEmpty()) {
         partitionGroups.add(RaftPartitionGroup.builder(COORDINATION_GROUP_NAME)
             .withDataDirectory(new File(dataDirectory, COORDINATION_GROUP_NAME))

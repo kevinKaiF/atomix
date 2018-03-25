@@ -122,6 +122,7 @@ public class ClusterMessage {
   public byte[] getBytes() {
     byte[] senderBytes = sender.toString().getBytes(StandardCharsets.UTF_8);
     byte[] subjectBytes = subject.getBytes(StandardCharsets.UTF_8);
+    // 12是用于分配三个int的length
     int capacity = 12 + senderBytes.length + subjectBytes.length + payload.length;
     ByteBuffer buffer = ByteBuffer.allocate(capacity);
     buffer.putInt(senderBytes.length);

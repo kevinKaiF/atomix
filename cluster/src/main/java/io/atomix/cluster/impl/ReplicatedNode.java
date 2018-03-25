@@ -28,7 +28,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
  */
 public class ReplicatedNode extends Node {
   private final LogicalTimestamp timestamp;
-  private final boolean tombstone;
+  private final boolean tombstone;  // 表示节点是否被删除？
 
   public ReplicatedNode(NodeId id, Type type, Endpoint endpoint, LogicalTimestamp timestamp, boolean tombstone) {
     super(id, type, endpoint);

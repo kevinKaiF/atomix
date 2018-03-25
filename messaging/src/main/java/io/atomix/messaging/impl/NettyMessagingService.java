@@ -147,6 +147,7 @@ public class NettyMessagingService implements ManagedMessagingService {
           throw new IllegalStateException("Failed to instantiate address", e);
         }
       }
+      // 集群名称的hashCode
       return new NettyMessagingService(name.hashCode(), endpoint);
     }
   }
@@ -178,7 +179,9 @@ public class NettyMessagingService implements ManagedMessagingService {
   private final int preamble;
   private final AtomicBoolean started = new AtomicBoolean(false);
   private final Map<String, BiConsumer<InternalRequest, ServerConnection>> handlers = new ConcurrentHashMap<>();
+  // 当前节点发送给其他节点请求连接
   private final Map<Channel, RemoteClientConnection> clientConnections = Maps.newConcurrentMap();
+  // 当前节点接收到其他节点请求连接
   private final Map<Channel, RemoteServerConnection> serverConnections = Maps.newConcurrentMap();
   private final AtomicLong messageIdGenerator = new AtomicLong(0);
 
@@ -385,14 +388,18 @@ public class NettyMessagingService implements ManagedMessagingService {
   }
 
   private CompletableFuture<Channel> getChannel(Endpoint endpoint, String messageType) {
+    // 获取channel列表
     List<CompletableFuture<Channel>> channelPool = getChannelPool(endpoint);
+    // 实际上是获取messageType对应的channel列表的下标
     int offset = getChannelOffset(messageType);
 
     CompletableFuture<Channel> channelFuture = channelPool.get(offset);
     if (channelFuture == null || channelFuture.isCompletedExceptionally()) {
+      // double-check
       synchronized (channelPool) {
         channelFuture = channelPool.get(offset);
         if (channelFuture == null || channelFuture.isCompletedExceptionally()) {
+          // 开启channel连接，并缓存到channelPool中
           channelFuture = openChannel(endpoint);
           channelPool.set(offset, channelFuture);
         }
@@ -403,6 +410,7 @@ public class NettyMessagingService implements ManagedMessagingService {
     final CompletableFuture<Channel> finalFuture = channelFuture;
     finalFuture.whenComplete((channel, error) -> {
       if (error == null) {
+        // 如果channel没有激活，将channelPool对应的channel置为null
         if (!channel.isActive()) {
           final CompletableFuture<Channel> currentFuture;
           synchronized (channelPool) {
@@ -412,11 +420,17 @@ public class NettyMessagingService implements ManagedMessagingService {
             }
           }
 
+          // 移除未生效的连接
           final ClientConnection connection = clientConnections.remove(channel);
           if (connection != null) {
             connection.close();
           }
 
+          /**
+           * 这里为什么会有if..else呢？？？TODO
+           * 因为channelPool中获取channel是通过取余的方式，
+           */
+          // 递归尝试连接
           if (currentFuture == finalFuture) {
             getChannel(endpoint, messageType).whenComplete((recursiveResult, recursiveError) -> {
               if (recursiveError == null) {
@@ -426,6 +440,7 @@ public class NettyMessagingService implements ManagedMessagingService {
               }
             });
           } else {
+            // 否则等待连接成功
             currentFuture.whenComplete((recursiveResult, recursiveError) -> {
               if (recursiveError == null) {
                 future.complete(recursiveResult);
@@ -435,6 +450,7 @@ public class NettyMessagingService implements ManagedMessagingService {
             });
           }
         } else {
+          // 连接成功
           future.complete(channel);
         }
       } else {
@@ -460,6 +476,7 @@ public class NettyMessagingService implements ManagedMessagingService {
       Function<ClientConnection, CompletableFuture<T>> callback,
       Executor executor,
       CompletableFuture<T> future) {
+    // 如果是本地节点，直接调用回调方法
     if (endpoint.equals(localEndpoint)) {
       callback.apply(localClientConnection).whenComplete((result, error) -> {
         if (error == null) {
@@ -471,20 +488,24 @@ public class NettyMessagingService implements ManagedMessagingService {
       return;
     }
 
+    // 获取连接
     getChannel(endpoint, type).whenComplete((channel, channelError) -> {
       if (channelError == null) {
         final ClientConnection connection = getOrCreateRemoteClientConnection(channel);
+        // 发送请求
         callback.apply(connection).whenComplete((result, sendError) -> {
           if (sendError == null) {
             executor.execute(() -> future.complete(result));
           } else {
             final Throwable cause = Throwables.getRootCause(sendError);
+            // 如果不是因为超时，消息错误而发送失败，则关闭channel，并移除clientConnections
             if (!(cause instanceof TimeoutException) && !(cause instanceof MessagingException)) {
               channel.close().addListener(f -> {
                 connection.close();
                 clientConnections.remove(channel);
               });
             }
+            // 记录异常结果
             executor.execute(() -> future.completeExceptionally(sendError));
           }
         });
@@ -494,6 +515,12 @@ public class NettyMessagingService implements ManagedMessagingService {
     });
   }
 
+  /**
+   * 封装channel，并添加到clientConnections中
+   *
+   * @param channel
+   * @return
+     */
   private RemoteClientConnection getOrCreateRemoteClientConnection(Channel channel) {
     RemoteClientConnection connection = clientConnections.get(channel);
     if (connection == null) {
@@ -504,6 +531,7 @@ public class NettyMessagingService implements ManagedMessagingService {
 
   @Override
   public void registerHandler(String type, BiConsumer<Endpoint, byte[]> handler, Executor executor) {
+    // 注册处理器
     handlers.put(type, (message, connection) -> executor.execute(() ->
         handler.accept(message.sender(), message.payload())));
   }
@@ -544,6 +572,12 @@ public class NettyMessagingService implements ManagedMessagingService {
     handlers.remove(type);
   }
 
+  /**
+   * 配置客户端连接
+   *
+   * @param endpoint
+   * @return
+     */
   private Bootstrap bootstrapClient(Endpoint endpoint) {
     Bootstrap bootstrap = new Bootstrap();
     bootstrap.option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
@@ -567,6 +601,11 @@ public class NettyMessagingService implements ManagedMessagingService {
     return bootstrap;
   }
 
+  /**
+   * 启动服务端
+   *
+   * @return
+     */
   private CompletableFuture<Void> startAcceptingConnections() {
     CompletableFuture<Void> future = new CompletableFuture<>();
     ServerBootstrap b = new ServerBootstrap();
@@ -609,6 +648,7 @@ public class NettyMessagingService implements ManagedMessagingService {
 
     f.addListener(future -> {
       if (future.isSuccess()) {
+        // 如果连接成功，将channel更新到retFuture
         retFuture.complete(f.channel());
       } else {
         retFuture.completeExceptionally(future.cause());
@@ -691,7 +731,7 @@ public class NettyMessagingService implements ManagedMessagingService {
     @Override
     protected void initChannel(SocketChannel channel) throws Exception {
       channel.pipeline()
-          .addLast("encoder", new MessageEncoder(localEndpoint, preamble))
+          .addLast("encoder", new MessageEncoder(localEndpoint, preamble))  // MessageEncoder带有本地节点的endpoint, 集群名称的hashcode
           .addLast("decoder", new MessageDecoder())
           .addLast("handler", dispatcher);
     }
@@ -707,8 +747,10 @@ public class NettyMessagingService implements ManagedMessagingService {
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, Object rawMessage) throws Exception {
+      // 这里强转类型，取决于channelHandler是如何处理请求的字节码
       InternalMessage message = (InternalMessage) rawMessage;
       try {
+        // 接收到客户端请求
         if (message.isRequest()) {
           RemoteServerConnection connection = serverConnections.get(ctx.channel());
           if (connection == null) {

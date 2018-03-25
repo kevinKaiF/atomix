@@ -89,9 +89,10 @@ public class DefaultClusterService
   private final Map<NodeId, StatefulNode> nodes = Maps.newConcurrentMap();
   private final Map<NodeId, PhiAccrualFailureDetector> failureDetectors = Maps.newConcurrentMap();
   private final ClusterMetadataEventListener metadataEventListener = this::handleMetadataEvent;
-
+  // 负责心跳发送调度的线程池
   private final ScheduledExecutorService heartbeatScheduler = Executors.newSingleThreadScheduledExecutor(
       namedThreads("atomix-cluster-heartbeat-sender", LOGGER));
+  // 负责心跳接收的线程池
   private final ExecutorService heartbeatExecutor = Executors.newSingleThreadExecutor(
       namedThreads("atomix-cluster-heartbeat-receiver", LOGGER));
   private ScheduledFuture<?> heartbeatFuture;
@@ -135,6 +136,7 @@ public class DefaultClusterService
         sendHeartbeat(node.endpoint(), payload);
         PhiAccrualFailureDetector failureDetector = failureDetectors.computeIfAbsent(node.id(), n -> new PhiAccrualFailureDetector());
         double phi = failureDetector.phi();
+        // 如果心跳超时，则更新节点为不活跃状态，并触发事件通知
         if (phi >= phiFailureThreshold || System.currentTimeMillis() - failureDetector.lastUpdated() > DEFAULT_FAILURE_TIME) {
           if (node.getState() == State.ACTIVE) {
             deactivateNode(node);
@@ -196,6 +198,7 @@ public class DefaultClusterService
       nodes.put(node.id(), node);
       post(new ClusterEvent(ClusterEvent.Type.NODE_ADDED, node));
       post(new ClusterEvent(ClusterEvent.Type.NODE_ACTIVATED, node));
+      // 向发送端发送心跳响应
       sendHeartbeat(node.endpoint(), SERIALIZER.encode(new ClusterHeartbeat(localNode.id(), localNode.type())));
     } else if (existingNode.getState() == State.INACTIVE) {
       existingNode.setState(State.ACTIVE);
@@ -265,9 +268,12 @@ public class DefaultClusterService
       metadataService.addListener(metadataEventListener);
       localNode.setState(State.ACTIVE);
       nodes.put(localNode.id(), localNode);
+      // 初始化nodes为StatefulNode
       metadataService.getMetadata().bootstrapNodes()
           .forEach(node -> nodes.putIfAbsent(node.id(), new StatefulNode(node.id(), node.type(), node.endpoint())));
+      // 注册心跳
       messagingService.registerHandler(HEARTBEAT_MESSAGE, this::handleHeartbeat, heartbeatExecutor);
+      // 启动心跳
       heartbeatFuture = heartbeatScheduler.scheduleWithFixedDelay(this::sendHeartbeats, 0, heartbeatInterval, TimeUnit.MILLISECONDS);
       LOGGER.info("Started");
     }

@@ -59,6 +59,7 @@ public class MessageEncoder extends MessageToByteEncoder<Object> {
 
   private void encodeMessage(InternalMessage message, ByteBuf out) {
     // If the endpoint hasn't been written to the channel, write it.
+    // 如果还没有写出节点的endpoint
     if (!endpointWritten) {
       final InetAddress senderIp = endpoint.host();
       final byte[] senderIpBytes = senderIp.getAddress();

@@ -97,6 +97,7 @@ public class DefaultClusterMetadataService
   private ScheduledFuture<?> metadataFuture;
 
   public DefaultClusterMetadataService(ClusterMetadata metadata, MessagingService messagingService) {
+    // 为集群中的每个node创建一个默认的复制节点
     metadata.bootstrapNodes().forEach(node -> nodes.put(node.id(),
         new ReplicatedNode(node.id(), node.type(), node.endpoint(), new LogicalTimestamp(0), false)));
     this.messagingService = messagingService;
@@ -105,6 +106,7 @@ public class DefaultClusterMetadataService
   @Override
   @SuppressWarnings("unchecked")
   public ClusterMetadata getMetadata() {
+    // 返回非墓碑节点
     return new ClusterMetadata(ImmutableList.copyOf(nodes.values().stream()
         .filter(node -> !node.tombstone())
         .collect(Collectors.toList())));
@@ -115,10 +117,14 @@ public class DefaultClusterMetadataService
     if (node.type() != Node.Type.CLIENT) {
       ReplicatedNode replicatedNode = nodes.get(node.id());
       if (replicatedNode == null) {
+        // 自增本地逻辑时间戳
+        // 注意：这个自增新生成的时间戳大于currentTimestamp，那么就更新currentTimestamp，并返回
         LogicalTimestamp timestamp = clock.increment();
         replicatedNode = new ReplicatedNode(node.id(), node.type(), node.endpoint(), timestamp, false);
         nodes.put(replicatedNode.id(), replicatedNode);
+        // 广播通知集群所有节点
         broadcastUpdate(new NodeUpdate(replicatedNode, timestamp));
+        // 触发ClusterMetadataEventListener通知
         post(new ClusterMetadataEvent(ClusterMetadataEvent.Type.METADATA_CHANGED, getMetadata()));
       }
     }
@@ -156,6 +162,8 @@ public class DefaultClusterMetadataService
     // Iterate through all of the peers and send a bootstrap request. On the first peer that returns
     // a successful bootstrap response, complete the future. Otherwise, if no peers respond with any
     // successful bootstrap response, the future will be completed with the last exception.
+
+    // 向集群中所有的节点发送请求
     CompletableFuture<Void> future = new CompletableFuture<>();
     peers.forEach(peer -> {
       bootstrap(peer).whenComplete((result, error) -> {
@@ -201,7 +209,7 @@ public class DefaultClusterMetadataService
   private void broadcastUpdate(NodeUpdate update) {
     nodes.values().stream()
         .map(Node::endpoint)
-        .filter(endpoint -> !endpoint.equals(messagingService.endpoint()))
+        .filter(endpoint -> !endpoint.equals(messagingService.endpoint()))  // 滤除本地节点
         .forEach(endpoint -> sendUpdate(endpoint, update));
   }
 
@@ -219,8 +227,10 @@ public class DefaultClusterMetadataService
     NodeUpdate update = SERIALIZER.decode(payload);
     clock.incrementAndUpdate(update.timestamp());
     ReplicatedNode node = nodes.get(update.node().id());
+    // 如果本节点的复制节点的时间戳小于接收到节点的时间戳，将更新为对方的
     if (node == null || node.timestamp().isOlderThan(update.timestamp())) {
       nodes.put(update.node().id(), update.node());
+      // 触发事件通知
       post(new ClusterMetadataEvent(ClusterMetadataEvent.Type.METADATA_CHANGED, getMetadata()));
     }
   }
@@ -243,6 +253,7 @@ public class DefaultClusterMetadataService
         .whenComplete((response, error) -> {
           if (error == null) {
             Set<NodeId> nodes = SERIALIZER.decode(response);
+            // 如果nodes不为空，说明对方的节点的时间戳比自己新
             for (NodeId nodeId : nodes) {
               ReplicatedNode node = this.nodes.get(nodeId);
               if (node != null) {
@@ -275,8 +286,10 @@ public class DefaultClusterMetadataService
   private byte[] handleAdvertisement(Endpoint endpoint, byte[] payload) {
     LogicalTimestamp timestamp = clock.increment();
     ClusterMetadataAdvertisement advertisement = SERIALIZER.decode(payload);
+    // 遍历复制节点
     Set<NodeId> staleNodes = nodes.values().stream().map(node -> {
       NodeDigest digest = advertisement.digest(node.id());
+      // 如果接收到的集群节点时间戳小于本节点集群时间戳，将本节点时间戳发送给对方
       if (digest == null || node.isNewerThan(digest.timestamp())) {
         sendUpdate(endpoint, new NodeUpdate(node, timestamp));
       } else if (digest.isNewerThan(node.timestamp())) {
@@ -298,6 +311,7 @@ public class DefaultClusterMetadataService
   public CompletableFuture<ClusterMetadataService> start() {
     if (started.compareAndSet(false, true)) {
       registerMessageHandlers();
+      // 向集群随机一个节点发送心跳
       return bootstrap().handle((result, error) -> {
         metadataFuture = messageScheduler.scheduleWithFixedDelay(this::sendAdvertisement, 0, HEARTBEAT_INTERVAL, TimeUnit.MILLISECONDS);
         log.info("Started");
